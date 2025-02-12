@@ -1,2 +1,4 @@
 watchdog
 requests
+retrying
+statsd
