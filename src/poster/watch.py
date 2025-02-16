@@ -11,9 +11,6 @@ from statsd import StatsClient
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-logger = logging.getLogger()
-stats = StatsClient(prefix=__name__)
-
 requests_log = logging.getLogger("requests.packages.urllib3")
 requests_log.setLevel(logging.DEBUG)
 requests_log.propagate = True
@@ -23,15 +20,22 @@ parser.add_argument("input_path", help="input directory")
 parser.add_argument('--api', default=os.getenv("POSTER_API"), required=True)
 parser.add_argument('--camera', help="override the directory name with this camera name")
 parser.add_argument('--log-level', default="WARN")
+parser.add_argument('--statsd-host', default='localhost')
+parser.add_argument('--statsd-port', default=8125)
 
 args = parser.parse_args()
+
+camera_name = args.camera if args.camera else os.path.basename(args.input_path.strip("/"))
+
+stats = StatsClient(host=args.statsd_host, port=args.statsd_port, prefix=f"{__name__}.{camera_name}")
+
 
 def _set_up_logging():
 
     level = logging.getLevelName(args.log_level.upper())
     formatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
 
-    logger = logging.getLogger('pysnmprrd')
+    logger = logging.getLogger(__name__)
     logger.setLevel(level)
 
     ch = logging.StreamHandler()
@@ -45,18 +49,29 @@ def _set_up_logging():
 logger = _set_up_logging()
 
 class ChecksumException(Exception):
+    pass
+
+def raise_checksum_exception():
     logger.info(f"checksum exception")
     stats.incr('checksum.exception')
+    raise ChecksumException
 
 
 class FileStoreException(Exception):
+    pass
+
+def raise_file_store_exception():
     logger.info(f"file storage exception")
     stats.incr('file.storage.exception')
-
+    raise FileStoreException
 
 class DbUpdateException(Exception):
+    pass
+
+def raise_db_update_exception():
     logger.info(f"db update exception")
     stats.incr('db.update.exception')
+
 
 def segment_checksum(filename):
     logger.debug(f"calculating checksum for {filename}")
@@ -104,12 +119,14 @@ class SegmentSender:
         # ideally, the response looks like:
         # {"checksum": "pass", "duration": 3.999178, "start_time": 313.884178, "db_stored": true}
         if not result["checksum"]:
-            raise ChecksumException()
+            raise_checksum_exception()
         elif not result["duration"] > 0.0:
-            raise FileStoreException
+            raise_file_store_exception()
         elif not result["db_stored"]:
-            raise DbUpdateException
+            raise_db_update_exception()
         else:
+            stats.incr('segment_sent')
+            stats.gauge('segment_duration', result["duration"])
             os.remove(filename)
 
 class NewSegmentHandler(FileSystemEventHandler):
