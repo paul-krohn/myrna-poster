@@ -53,7 +53,7 @@ class ChecksumException(Exception):
 
 def raise_checksum_exception():
     logger.info(f"checksum exception")
-    stats.incr('checksum.exception')
+    stats.incr(f"checksum.exception#camera={camera_name}")
     raise ChecksumException
 
 
@@ -62,7 +62,7 @@ class FileStoreException(Exception):
 
 def raise_file_store_exception():
     logger.info(f"file storage exception")
-    stats.incr('file.storage.exception')
+    stats.incr(f"file.storage.exception#camera={camera_name}")
     raise FileStoreException
 
 class DbUpdateException(Exception):
@@ -70,9 +70,9 @@ class DbUpdateException(Exception):
 
 def raise_db_update_exception():
     logger.info(f"db update exception")
-    stats.incr('db.update.exception')
+    stats.incr(f"db.update.exception#camera={camera_name}")
 
-
+@stats.timer(f"segment_checksum#camera={camera_name}")
 def segment_checksum(filename):
     logger.debug(f"calculating checksum for {filename}")
     BUF_SIZE = 1048576
@@ -103,6 +103,7 @@ class SegmentSender:
         session.headers.update({'X-CSRFToken': token})
         return session
 
+    @stats.timer(f"send#camera={camera_name}")
     @retry(wait_random_min=1000, wait_random_max=2000)
     def send(self, filename):
         logger.debug(f"sending {filename}")
@@ -125,8 +126,8 @@ class SegmentSender:
         elif not result["db_stored"]:
             raise_db_update_exception()
         else:
-            stats.incr('segment_sent')
-            stats.gauge('segment_duration', result["duration"])
+            stats.incr(f"segment_sent#camera={camera_name}")
+            stats.gauge(f"remote_segment_duration#camera={camera_name}", result["duration"])
             os.remove(filename)
 
 class NewSegmentHandler(FileSystemEventHandler):
@@ -136,6 +137,7 @@ class NewSegmentHandler(FileSystemEventHandler):
 
     def on_closed(self, event: FileSystemEvent) -> None:
         if re.search(r'\.ts$', event.src_path):
+            stats.incr(f"file_closed#camera={camera_name}")
             logger.debug(f"file {event.src_path} {event.event_type}")
             self.sender.send(event.src_path)
         else:
