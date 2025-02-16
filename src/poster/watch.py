@@ -27,7 +27,7 @@ args = parser.parse_args()
 
 camera_name = args.camera if args.camera else os.path.basename(args.input_path.strip("/"))
 
-stats = StatsClient(host=args.statsd_host, port=args.statsd_port, prefix=f"{__name__}.{camera_name}")
+stats = StatsClient(host=args.statsd_host, port=args.statsd_port, prefix="poster")
 
 
 def _set_up_logging():
