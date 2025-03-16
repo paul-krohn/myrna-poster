@@ -128,7 +128,6 @@ class SegmentSender:
         else:
             stats.incr(f"segment_sent#camera={camera_name}")
             stats.gauge(f"remote_segment_duration#camera={camera_name}", result["duration"])
-            os.remove(filename)
 
 class NewSegmentHandler(FileSystemEventHandler):
     sender = SegmentSender(args)
