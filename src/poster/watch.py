@@ -71,6 +71,7 @@ class DbUpdateException(Exception):
 def raise_db_update_exception():
     logger.info(f"db update exception")
     stats.incr(f"db.update.exception#camera={camera_name}")
+    raise DbUpdateException
 
 @stats.timer(f"segment_checksum#camera={camera_name}")
 def segment_checksum(filename):
@@ -92,6 +93,7 @@ class SegmentSender:
         self.api_url = args.api
         self.api_session = self._api_session()
         self.camera = args.camera if args.camera else os.path.basename(args.input_path.strip("/"))
+        self.counter = 0
 
     def _api_session(self):
         session = requests.Session()
@@ -104,7 +106,8 @@ class SegmentSender:
         return session
 
     @stats.timer(f"send#camera={camera_name}")
-    @retry(wait_random_min=1000, wait_random_max=2000)
+    @retry(wait_random_min=1000, wait_random_max=2000, stop_max_attempt_number=5,
+           retry_on_exception=lambda e: not isinstance(e, FileNotFoundError) and (logger.warning(f"retrying after: {e!r}") or True))
     def send(self, filename):
         logger.debug(f"sending {filename}")
         segment_sha1 = segment_checksum(filename)
@@ -126,6 +129,11 @@ class SegmentSender:
         elif not result["db_stored"]:
             raise_db_update_exception()
         else:
+            logger.debug(f"sent {filename} to {api_url} with response: {response.content}")
+            self.counter += 1
+            if self.counter % 8 == 0:
+                logger.info(f"sent {self.counter} segments since startup")
+            result = response.json()
             stats.incr(f"segment_sent#camera={camera_name}")
             stats.gauge(f"remote_segment_duration#camera={camera_name}", result["duration"])
 
@@ -138,7 +146,14 @@ class NewSegmentHandler(FileSystemEventHandler):
         if re.search(r'\.ts$', event.src_path):
             stats.incr(f"file_closed#camera={camera_name}")
             logger.debug(f"file {event.src_path} {event.event_type}")
-            self.sender.send(event.src_path)
+            try:
+                self.sender.send(event.src_path)
+            except FileNotFoundError:
+                logger.warning(f"file disappeared before send: {event.src_path}")
+                stats.incr(f"file.disappeared#camera={camera_name}")
+            except Exception as e:
+                logger.error(f"failed to send {event.src_path}: {e!r}")
+                stats.incr(f"send.failed#camera={camera_name}")
         else:
             logger.debug(f"ignoring event on file {event.src_path}")
 
