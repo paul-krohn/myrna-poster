@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import re
+import threading
 import time
 
 import requests
@@ -137,25 +138,69 @@ class SegmentSender:
             stats.incr(f"segment_sent#camera={camera_name}")
             stats.gauge(f"remote_segment_duration#camera={camera_name}", result["duration"])
 
+def _wait_until_stable(path, interval=0.3, required=2):
+    """Block until the file size is unchanged for `required` consecutive checks."""
+    prev, streak = -1, 0
+    while streak < required:
+        try:
+            cur = os.path.getsize(path)
+        except FileNotFoundError:
+            return
+        streak = streak + 1 if cur == prev and cur > 0 else 0
+        prev = cur
+        time.sleep(interval)
+
+
 class NewSegmentHandler(FileSystemEventHandler):
     sender = SegmentSender(args)
+    _sent: set = set()
+
+    def _send(self, path):
+        try:
+            self.sender.send(path)
+        except FileNotFoundError:
+            logger.warning(f"file disappeared before send: {path}")
+            stats.incr(f"file.disappeared#camera={camera_name}")
+        except Exception as e:
+            logger.error(f"failed to send {path}: {e!r}")
+            stats.incr(f"send.failed#camera={camera_name}")
+
+    def _rename_with_ms(self, path):
+        basename = os.path.basename(path)
+        if re.match(r'^\d+\.ts$', basename):
+            ts_ms = int(time.time() * 1000)
+            seconds, ms = ts_ms // 1000, ts_ms % 1000
+            new_path = os.path.join(os.path.dirname(path), f"{seconds}.{ms:03d}.ts")
+            os.rename(path, new_path)
+            logger.debug(f"renamed {basename} → {os.path.basename(new_path)}")
+            return new_path
+        return path
+
     def on_any_event(self, event):
         logger.debug(f"file {event.src_path} {event.event_type}")
 
+    def on_moved(self, event: FileSystemEvent) -> None:
+        dest = event.dest_path
+        if not re.search(r'\.ts$', dest):
+            return
+        stats.incr(f"file_moved#camera={camera_name}")
+        self._sent.add(dest)
+        def _worker():
+            _wait_until_stable(dest)
+            self._send(dest)
+        threading.Thread(target=_worker, daemon=True).start()
+
     def on_closed(self, event: FileSystemEvent) -> None:
-        if re.search(r'\.ts$', event.src_path):
-            stats.incr(f"file_closed#camera={camera_name}")
-            logger.debug(f"file {event.src_path} {event.event_type}")
-            try:
-                self.sender.send(event.src_path)
-            except FileNotFoundError:
-                logger.warning(f"file disappeared before send: {event.src_path}")
-                stats.incr(f"file.disappeared#camera={camera_name}")
-            except Exception as e:
-                logger.error(f"failed to send {event.src_path}: {e!r}")
-                stats.incr(f"send.failed#camera={camera_name}")
-        else:
-            logger.debug(f"ignoring event on file {event.src_path}")
+        path = event.src_path
+        if not re.search(r'\.ts$', path):
+            logger.debug(f"ignoring event on file {path}")
+            return
+        stats.incr(f"file_closed#camera={camera_name}")
+        if path in self._sent:
+            self._sent.discard(path)
+            return
+        path = self._rename_with_ms(path)
+        self._send(path)
 
 event_handler = NewSegmentHandler()
 observer = Observer()
