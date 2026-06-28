@@ -152,8 +152,7 @@ def _wait_until_stable(path, interval=0.3, required=2):
 
 
 class NewSegmentHandler(FileSystemEventHandler):
-    sender = SegmentSender(args)
-    _upload_sem = threading.Semaphore(1)
+    _upload_sem = threading.Semaphore(4)
 
     def on_any_event(self, event):
         logger.debug(f"file {event.src_path} {event.event_type}")
@@ -171,9 +170,12 @@ class NewSegmentHandler(FileSystemEventHandler):
             with self._upload_sem:
                 t2 = time.time()
                 logger.debug(f"timing sem_wait={t2-t1:.2f}s {dest}")
+                sender = SegmentSender(args)
+                t3 = time.time()
+                logger.debug(f"timing session_init={t3-t2:.2f}s {dest}")
                 try:
-                    self.sender.send(dest)
-                    logger.info(f"timing send={time.time()-t2:.2f}s {dest}")
+                    sender.send(dest)
+                    logger.info(f"timing send={time.time()-t3:.2f}s {dest}")
                 except FileNotFoundError:
                     logger.warning(f"file disappeared before send: {dest}")
                     stats.incr(f"file.disappeared#camera={camera_name}")
