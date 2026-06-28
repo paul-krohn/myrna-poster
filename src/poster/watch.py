@@ -119,7 +119,6 @@ class SegmentSender:
             files={'segment': open(filename, 'rb')},
             data={'sha1': segment_sha1}
         )
-        logger.info(f"sent {filename} to {api_url} with response: {response.content}")
         result = response.json()
         # ideally, the response looks like:
         # {"checksum": "pass", "duration": 3.999178, "start_time": 313.884178, "db_stored": true}
@@ -130,7 +129,7 @@ class SegmentSender:
         elif not result["db_stored"]:
             raise_db_update_exception()
         else:
-            logger.debug(f"sent {filename} to {api_url} with response: {response.content}")
+            logger.info(f"sent {filename} to {api_url} with response: {response.content}")
             self.counter += 1
             if self.counter % 8 == 0:
                 logger.info(f"sent {self.counter} segments since startup")
