@@ -165,13 +165,13 @@ class NewSegmentHandler(FileSystemEventHandler):
             t0 = time.time()
             _wait_until_stable(dest)
             t1 = time.time()
-            logger.debug(f"timing wait_stable={t1-t0:.2f}s {dest}")
+            stats.gauge(f"wait_stable#camera={camera_name}", t1 - t0)
             with self._upload_sem:
                 t2 = time.time()
-                logger.debug(f"timing sem_wait={t2-t1:.2f}s {dest}")
+                stats.gauge(f"sem_wait#camera={camera_name}", t2 - t1)
                 sender = SegmentSender(args)
                 t3 = time.time()
-                logger.debug(f"timing session_init={t3-t2:.2f}s {dest}")
+                stats.gauge(f"session_init#camera={camera_name}", t3 - t2)
                 try:
                     sender.send(dest)
                     logger.info(f"timing send={time.time()-t3:.2f}s {dest}")
