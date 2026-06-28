@@ -153,6 +153,7 @@ def _wait_until_stable(path, interval=0.3, required=2):
 
 class NewSegmentHandler(FileSystemEventHandler):
     sender = SegmentSender(args)
+    _upload_sem = threading.Semaphore(1)
 
     def on_any_event(self, event):
         logger.debug(f"file {event.src_path} {event.event_type}")
@@ -164,14 +165,15 @@ class NewSegmentHandler(FileSystemEventHandler):
         stats.incr(f"file_moved#camera={camera_name}")
         def _worker():
             _wait_until_stable(dest)
-            try:
-                self.sender.send(dest)
-            except FileNotFoundError:
-                logger.warning(f"file disappeared before send: {dest}")
-                stats.incr(f"file.disappeared#camera={camera_name}")
-            except Exception as e:
-                logger.error(f"failed to send {dest}: {e!r}")
-                stats.incr(f"send.failed#camera={camera_name}")
+            with self._upload_sem:
+                try:
+                    self.sender.send(dest)
+                except FileNotFoundError:
+                    logger.warning(f"file disappeared before send: {dest}")
+                    stats.incr(f"file.disappeared#camera={camera_name}")
+                except Exception as e:
+                    logger.error(f"failed to send {dest}: {e!r}")
+                    stats.incr(f"send.failed#camera={camera_name}")
         threading.Thread(target=_worker, daemon=True).start()
 
 event_handler = NewSegmentHandler()
