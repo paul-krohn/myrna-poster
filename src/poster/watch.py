@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import re
+import threading
 import time
 
 import requests
@@ -118,7 +119,6 @@ class SegmentSender:
             files={'segment': open(filename, 'rb')},
             data={'sha1': segment_sha1}
         )
-        logger.info(f"sent {filename} to {api_url} with response: {response.content}")
         result = response.json()
         # ideally, the response looks like:
         # {"checksum": "pass", "duration": 3.999178, "start_time": 313.884178, "db_stored": true}
@@ -129,7 +129,7 @@ class SegmentSender:
         elif not result["db_stored"]:
             raise_db_update_exception()
         else:
-            logger.debug(f"sent {filename} to {api_url} with response: {response.content}")
+            logger.info(f"sent {filename} to {api_url} with response: {response.content}")
             self.counter += 1
             if self.counter % 8 == 0:
                 logger.info(f"sent {self.counter} segments since startup")
@@ -137,25 +137,51 @@ class SegmentSender:
             stats.incr(f"segment_sent#camera={camera_name}")
             stats.gauge(f"remote_segment_duration#camera={camera_name}", result["duration"])
 
+def _wait_until_stable(path, interval=0.3, required=2):
+    """Block until the file size is unchanged for `required` consecutive checks."""
+    prev, streak = -1, 0
+    while streak < required:
+        try:
+            cur = os.path.getsize(path)
+        except FileNotFoundError:
+            return
+        streak = streak + 1 if cur == prev and cur > 0 else 0
+        prev = cur
+        time.sleep(interval)
+
+
 class NewSegmentHandler(FileSystemEventHandler):
-    sender = SegmentSender(args)
+    _upload_sem = threading.Semaphore(4)
+
     def on_any_event(self, event):
         logger.debug(f"file {event.src_path} {event.event_type}")
 
-    def on_closed(self, event: FileSystemEvent) -> None:
-        if re.search(r'\.ts$', event.src_path):
-            stats.incr(f"file_closed#camera={camera_name}")
-            logger.debug(f"file {event.src_path} {event.event_type}")
-            try:
-                self.sender.send(event.src_path)
-            except FileNotFoundError:
-                logger.warning(f"file disappeared before send: {event.src_path}")
-                stats.incr(f"file.disappeared#camera={camera_name}")
-            except Exception as e:
-                logger.error(f"failed to send {event.src_path}: {e!r}")
-                stats.incr(f"send.failed#camera={camera_name}")
-        else:
-            logger.debug(f"ignoring event on file {event.src_path}")
+    def on_moved(self, event: FileSystemEvent) -> None:
+        dest = event.dest_path
+        if not re.search(r'\.ts$', dest):
+            return
+        stats.incr(f"file_moved#camera={camera_name}")
+        def _worker():
+            t0 = time.time()
+            _wait_until_stable(dest)
+            t1 = time.time()
+            stats.gauge(f"wait_stable#camera={camera_name}", t1 - t0)
+            with self._upload_sem:
+                t2 = time.time()
+                stats.gauge(f"sem_wait#camera={camera_name}", t2 - t1)
+                sender = SegmentSender(args)
+                t3 = time.time()
+                stats.gauge(f"session_init#camera={camera_name}", t3 - t2)
+                try:
+                    sender.send(dest)
+                    logger.info(f"timing send={time.time()-t3:.2f}s {dest}")
+                except FileNotFoundError:
+                    logger.warning(f"file disappeared before send: {dest}")
+                    stats.incr(f"file.disappeared#camera={camera_name}")
+                except Exception as e:
+                    logger.error(f"failed to send {dest}: {e!r}")
+                    stats.incr(f"send.failed#camera={camera_name}")
+        threading.Thread(target=_worker, daemon=True).start()
 
 event_handler = NewSegmentHandler()
 observer = Observer()
