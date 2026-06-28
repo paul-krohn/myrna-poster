@@ -171,7 +171,11 @@ class NewSegmentHandler(FileSystemEventHandler):
             ts_ms = int(time.time() * 1000)
             seconds, ms = ts_ms // 1000, ts_ms % 1000
             new_path = os.path.join(os.path.dirname(path), f"{seconds}.{ms:03d}.ts")
-            os.rename(path, new_path)
+            try:
+                os.rename(path, new_path)
+            except FileNotFoundError:
+                logger.warning(f"file already gone during rename: {basename}")
+                return None
             logger.debug(f"renamed {basename} → {os.path.basename(new_path)}")
             return new_path
         return path
@@ -199,7 +203,10 @@ class NewSegmentHandler(FileSystemEventHandler):
         if path in self._sent:
             self._sent.discard(path)
             return
+        self._sent.add(path)
         path = self._rename_with_ms(path)
+        if path is None:
+            return
         self._send(path)
 
 event_handler = NewSegmentHandler()
