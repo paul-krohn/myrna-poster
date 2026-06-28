@@ -164,10 +164,16 @@ class NewSegmentHandler(FileSystemEventHandler):
             return
         stats.incr(f"file_moved#camera={camera_name}")
         def _worker():
+            t0 = time.time()
             _wait_until_stable(dest)
+            t1 = time.time()
+            logger.debug(f"timing wait_stable={t1-t0:.2f}s {dest}")
             with self._upload_sem:
+                t2 = time.time()
+                logger.debug(f"timing sem_wait={t2-t1:.2f}s {dest}")
                 try:
                     self.sender.send(dest)
+                    logger.info(f"timing send={time.time()-t2:.2f}s {dest}")
                 except FileNotFoundError:
                     logger.warning(f"file disappeared before send: {dest}")
                     stats.incr(f"file.disappeared#camera={camera_name}")
