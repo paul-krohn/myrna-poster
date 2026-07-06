@@ -129,7 +129,7 @@ class SegmentSender:
         elif not result["db_stored"]:
             raise_db_update_exception()
         else:
-            logger.info(f"sent {filename} to {api_url} with response: {response.content}")
+            logger.debug(f"sent {filename} to {api_url} with response: {response.content}")
             self.counter += 1
             if self.counter % 8 == 0:
                 logger.info(f"sent {self.counter} segments since startup")
@@ -175,6 +175,7 @@ class NewSegmentHandler(FileSystemEventHandler):
                 try:
                     sender.send(dest)
                     logger.info(f"timing send={time.time()-t3:.2f}s {dest}")
+                    os.unlink(dest)
                 except FileNotFoundError:
                     logger.warning(f"file disappeared before send: {dest}")
                     stats.incr(f"file.disappeared#camera={camera_name}")
